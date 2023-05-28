@@ -1,0 +1,19 @@
+---
+- name: Deploy UERANSIM subscriber
+  hosts: vms
+  tasks:
+
+  - name: "Find IP address of WEBUI and ask user to register the subscriber"
+    shell: |
+      WEBUI=kubectl get pods -n free5gc | grep web | grep -oE ^.*\-.?
+      WEBIP=kubectl describe pod $WEBUI -n free5gc |  grep -oE
+      "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | tail -1
+      echo "Go to $WEBIP:3000, log in with admin/1423 and register your UE(s)"
+
+  - name: "Find IP address of AMF and supply gNB chart with it"
+    shell: |
+      AMF_pod=kubectl get pods -n free5gc | grep amf | grep -oE ^.*\-.?
+      AMF_IP=kubectl describe pod $AMF_pod -n free5gc |  grep -oE 
+      "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" | tail -1
+      cd ~/towards5gs-helm/charts/ueransim/templates/gnb
+      sed -i "s/\(address:\).*/\1 $AMF_IP/g" gnb.yaml
