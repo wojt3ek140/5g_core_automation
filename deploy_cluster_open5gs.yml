@@ -1,0 +1,41 @@
+---
+- name: Deploy cluster and Open5GS 
+  hosts: vms
+  tasks:
+
+  - name: "Set interfaces to promiscuous mode"
+    shell: |
+      sudo ifconfig eth0 promisc
+      sudo ifconfig eth1 promisc
+
+  - name: "Add DNS entry"
+    shell: |
+      dns_ip=$(ip -f inet addr show eth0 | sed -En -e 's/.*inet ([0-9.]+).*/\1/p')
+      echo "$dns_ip k8s-open5gs.com" >> /etc/hosts
+
+  - name: "Deploy Kubernetes cluster using DNS entry"
+    shell: |
+      sudo kubeadm init --pod-network-cidr=192.168.0.0/16 --upload-certs
+      --control-plane-endpoint=k8s-open5gs.com
+
+  - name: "Save Kubernetes settings"
+     shell: |
+       mkdir -p $HOME/.kube
+       sudo cp -f /etc/kubernetes/admin.conf $HOME/.kube/config
+       sudo chown $(id -u):$(id -g) $HOME/.kube/config
+       echo "Kubernetes settings saved"
+
+  - name: "Apply Kubernetes routing - Flannel and Multus CNI"
+    shell: |
+      kubectl apply -f flannel.yaml
+      kubectl taint nodes $(hostname) node-role.kubernetes.io/master:NoSchedule-
+      kubectl create ns open5gs
+      cd multus-cni
+      cat ./deployments/multus-daemonset.yml | kubectl apply -f -
+
+  - name: "Deploy Open5GS Core Network"
+    shell: |
+      cd ~/openverso-charts/charts/open5gs/
+      helm dependency update
+      cd ~/openverso-charts/charts/
+      helm -n open5gs install v1 ./open5gs/

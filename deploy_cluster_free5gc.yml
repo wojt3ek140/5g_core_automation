@@ -1,0 +1,41 @@
+---
+- name: Deploy cluster and Free5GC 
+  hosts: vms
+  tasks:
+
+  - name: "Set interfaces to promiscuous mode"
+    shell: |
+      sudo ifconfig eth0 promisc
+      sudo ifconfig eth1 promisc
+
+  - name: "Add DNS entry"
+    shell: |
+      dns_ip=$(ip -f inet addr show eth0 | sed -En -e 's/.*inet ([0-9.]+).*/\1/p')
+      echo "$dns_ip k8s-free5gc.com" >> /etc/hosts
+
+  - name: "Deploy Kubernetes cluster using DNS entry"
+    shell: |
+      sudo kubeadm init --pod-network-cidr=192.168.0.0/16 --upload-certs
+      --control-plane-endpoint=k8s-free5gc.com
+
+  - name: "Save Kubernetes settings"
+     shell: |
+       mkdir -p $HOME/.kube
+       sudo cp -f /etc/kubernetes/admin.conf $HOME/.kube/config
+       sudo chown $(id -u):$(id -g) $HOME/.kube/config
+       echo "Kubernetes settings saved"
+
+  - name: "Apply Kubernetes routing - Flannel and Multus CNI"
+    shell: |
+      kubectl apply -f flannel.yaml
+      kubectl taint nodes $(hostname) node-role.kubernetes.io/master:NoSchedule-
+      kubectl create ns free5gc
+      cd multus-cni
+      cat ./deployments/multus-daemonset.yml | kubectl apply -f -
+
+  - name: "Deploy Free5GC Core Network"
+    shell: |
+      cd ~/towards5gs-helm/free5gc/
+      helm dependency update
+      cd ~/towards5gs-helm/
+      helm -n free5gc install v1 ./free5gc/
