@@ -13,6 +13,59 @@
       dns_ip=$(ip -f inet addr show eth0 | sed -En -e 's/.*inet ([0-9.]+).*/\1/p')
       echo "$dns_ip k8s-open5gs.com" >> /etc/hosts
 
+  # prepare the system for k8s
+  - name: disable swap
+    ansible.builtin.command: swapoff -a
+
+  - name: remove swap from fstab
+    ansible.builtin.shell: sed -i '/swap/d' /etc/fstab
+
+  - name: enable bridged traffic to iptables
+    ansible.builtin.sysctl:
+      name: net.bridge.bridge-nf-call-iptables
+      value: 1
+      state: present
+
+  - name: enable bridged traffic to arptables
+    ansible.builtin.sysctl:
+      name: net.bridge.bridge-nf-call-arptables
+      value: 1
+      state: present
+
+  # install kubelet, kubeadm, kubectl
+
+  - name: Add an apt key
+    ansible.builtin.apt_key:
+      url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+      state: present
+
+  - name: Add apt repository
+    ansible.builtin.apt_repository:
+      repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+      state: present
+      filename: kubernetes.list
+
+  - name: Install kubernetes
+    ansible.builtin.apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+    loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+  # install helm
+  - name: Install helm
+    unarchive:
+      src: "https://get.helm.sh/helm-v{{ helm_version }}-linux-amd64.tar.gz"
+      dest: /usr/local/bin
+      extra_opts: "--strip-components=1"
+      owner: root
+      group: root
+      mode: 0755
+      remote_src: true
+
   - name: "Deploy Kubernetes cluster using DNS entry"
     shell: |
       sudo kubeadm init --pod-network-cidr=192.168.0.0/16 --upload-certs
@@ -25,6 +78,25 @@
        sudo chown $(id -u):$(id -g) $HOME/.kube/config
        echo "Kubernetes settings saved"
 
+  - name: "create dir for cni files"
+    ansible.builtin.file:
+      path: /opt/cni
+      state: directory
+      owner: root
+      group: root
+      mode: 0755
+
+  - name: "Get Flannel and Multus CNI"
+    ansible.builtin.get_url:
+      url: https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      dest: /opt/cni/flannel.yaml
+      mode: 0644
+
+  - name: "Get Multus CNI"
+    ansible.builtin.git:
+      repo: https://github.com/intel/multus-cni.git
+      dest: /opt/cni/multus-cni
+
   - name: "Apply Kubernetes routing - Flannel and Multus CNI"
     shell: |
       kubectl apply -f flannel.yaml
@@ -32,6 +104,19 @@
       kubectl create ns open5gs
       cd multus-cni
       cat ./deployments/multus-daemonset.yml | kubectl apply -f -
+
+  - name: "Create dir for Helm charts"
+    ansible.builtin.file:
+      path: /opt/charts
+      state: directory
+      owner: root
+      group: root
+      mode: 0755
+
+  - name: "Get Helm chart for openverso"
+    ansible.builtin.git:
+      repo: https://github.com/Gradiant/5g-charts.git
+      dest: /opt/charts/openverso-charts
 
   - name: "Deploy Open5GS Core Network"
     shell: |
